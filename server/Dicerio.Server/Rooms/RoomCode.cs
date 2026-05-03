@@ -6,7 +6,7 @@ public static class RoomCode
 {
     // Crockford-ish unambiguous alphabet — no 0/O, 1/I, U.
     private const string Alphabet = "23456789ABCDEFGHJKLMNPQRSTVWXYZ";
-    public const int Length = 6;
+    public const int Length = 4;
 
     public static string Generate()
     {

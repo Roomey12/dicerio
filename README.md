@@ -118,7 +118,7 @@ A `RoomCleanupHostedService` sweeps every 2 minutes and reaps idle rooms in `Wai
 
 ### Room codes
 
-6-character codes drawn from a Crockford-ish unambiguous alphabet (`23456789ABCDEFGHJKLMNPQRSTVWXYZ` — no `0/O/1/I/U`). Generated via `RandomNumberGenerator` and regenerated on the rare collision (up to 9 attempts).
+4-character codes drawn from a Crockford-ish unambiguous alphabet (`23456789ABCDEFGHJKLMNPQRSTVWXYZ` — no `0/O/1/I/U`). Generated via `RandomNumberGenerator` and regenerated on the rare collision (up to 9 attempts). Length is `RoomCode.Length`; bump it if you ever expect more than a few thousand concurrent rooms (collision probability with 4 chars ≈ active-rooms / 810,000).
 
 `RoomCode.Normalize` strips spaces/dashes, uppercases, and rejects ambiguous characters so that pasting `"abc-d3-2g"` is forgiving but `"O01"` is rejected.
 
@@ -136,7 +136,7 @@ This is intentionally aggressive for the MVP — a "30s grace window with a reco
 
 Open two browser windows (or one Chrome + one Firefox/incognito) at `http://localhost:5173`.
 
-1. **Host:** type a name → `Create room`. Confirm the 6-char room code is shown big, copy button works, `?code=…` URL hint is visible. State should show `WaitingForOpponent`.
+1. **Host:** type a name → `Create room`. Confirm the 4-char room code is shown big, copy button works, `?code=…` URL hint is visible. State should show `WaitingForOpponent`.
 2. **Guest:** paste the code → `Join`. Both windows should now show the dice board, identical scores, and the same active-player highlight.
 3. **Active player rolls.** Confirm only their unlocked dice get values; the inactive player sees the same dice but their action buttons are disabled. The `event-strip` says "X rolled".
 4. **Lock a non-scoring die** (try selecting a `2` and a `3` and pressing Lock). Confirm the inactive client's state doesn't change; the active client sees a `GameError` with code `InvalidLockPartition`.

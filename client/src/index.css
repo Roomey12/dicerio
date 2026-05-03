@@ -81,12 +81,19 @@ button.ghost {
 
 input[type="text"] {
   font: inherit;
+  /* iOS zooms inputs whose font-size is below 16px on focus; pin at 16. */
+  font-size: 16px;
   padding: 0.6em 0.8em;
   border-radius: 10px;
   border: 1px solid #2a3140;
   background: var(--bg-1);
   color: var(--fg-0);
   letter-spacing: 0.06em;
+}
+
+button {
+  /* Prevent the iOS "tap to zoom" delay and the double-tap zoom gesture. */
+  touch-action: manipulation;
 }
 
 input[type="text"]:focus {

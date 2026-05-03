@@ -134,7 +134,7 @@ public sealed class GameHub : Hub
         var normalized = RoomCode.Normalize(request.RoomCode);
         if (normalized is null)
         {
-            throw new HubException("InvalidCode: room code must be 6 characters from the unambiguous alphabet.");
+            throw new HubException($"InvalidCode: room code must be {RoomCode.Length} characters from the unambiguous alphabet.");
         }
 
         var state = await _store.FindByCodeAsync(normalized);

@@ -1,17 +1,23 @@
 .app {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 32px 16px 80px;
-  gap: 28px;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  gap: 24px;
 }
 
 .brand {
   display: flex;
-  align-items: baseline;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
+  justify-content: center;
   margin-bottom: 8px;
+}
+
+.brand h1 {
+  flex: 0 0 auto;
 }
 
 .brand h1 {
@@ -34,6 +40,25 @@
   padding: 4px 10px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
+}
+
+.icon-button {
+  background: transparent;
+  border: 1px solid #2a3140;
+  color: var(--fg-1);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.icon-button[aria-pressed="false"] {
+  color: var(--fg-2);
+}
+
+.icon-button:hover {
+  background: var(--bg-2);
+  color: var(--fg-0);
 }
 
 .connection-pill {
@@ -610,4 +635,116 @@ input[data-invalid="true"] {
 .rules-foot {
   font-size: 13px;
   color: var(--fg-2);
+}
+
+/* ---------- Mobile ---------- */
+
+@media (max-width: 640px) {
+  .app {
+    padding: 16px 12px calc(20px + env(safe-area-inset-bottom, 0px));
+    gap: 16px;
+  }
+
+  .brand h1 {
+    font-size: 22px;
+  }
+
+  .brand small {
+    display: none;
+  }
+
+  .scoreboard {
+    gap: 8px;
+  }
+
+  .player-card {
+    padding: 12px 14px;
+  }
+
+  .player-card .name {
+    font-size: 13px;
+  }
+
+  .player-card .score {
+    font-size: 22px;
+    flex-wrap: wrap;
+  }
+
+  .player-card .score-target {
+    font-size: 12px;
+  }
+
+  .dice-area {
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .dice-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+  }
+
+  .die {
+    border-radius: 12px;
+    font-size: 28px;
+  }
+
+  .actions {
+    gap: 8px;
+  }
+
+  .actions button {
+    flex: 1 1 calc(50% - 4px);
+    padding: 0.7em 0.8em;
+    font-size: 14px;
+  }
+
+  .actions .ghost {
+    flex-basis: 100%;
+  }
+
+  .room-code {
+    font-size: 28px;
+    letter-spacing: 0.14em;
+    padding: 10px 16px;
+  }
+
+  .lobby {
+    padding: 20px;
+    gap: 14px;
+  }
+
+  .history {
+    padding: 12px 14px;
+  }
+
+  .history-list {
+    max-height: 240px;
+  }
+
+  .rules-tip-popover {
+    top: 16px;
+    max-height: calc(100dvh - 32px);
+    padding: 18px 18px 14px;
+    font-size: 13px;
+  }
+
+  .rules-table td {
+    font-size: 13px;
+  }
+}
+
+/* Very small / iPhone-mini-class screens */
+@media (max-width: 360px) {
+  .player-card .score {
+    font-size: 20px;
+  }
+
+  .die {
+    font-size: 24px;
+  }
+
+  .room-code {
+    font-size: 24px;
+  }
 }

@@ -16,8 +16,49 @@ import {
   type HistoryEntry,
   type HistoryState,
 } from "./history";
+import { isSoundEnabled, play, primeAudio, setSoundEnabled } from "./sounds";
 
 type Screen = "lobby" | "match";
+
+function dispatchSounds(state: MatchStateDto, wasMyTurn: boolean): void {
+  const isMyTurn = !!state.youAre && state.activePlayerId === state.youAre && state.phase !== "GameOver";
+
+  switch (state.lastEvent.kind) {
+    case "Rolled":
+      play("roll");
+      break;
+    case "Locked":
+      play("lock");
+      break;
+    case "Banked":
+      play("bank");
+      break;
+    case "Busted":
+      play("bust");
+      break;
+    case "HotDice":
+      play("hotdice");
+      break;
+    case "GameOver":
+      if (state.winnerId === state.youAre) play("win");
+      break;
+    case "Forfeit":
+      if (state.winnerId === state.youAre) play("win");
+      else play("bust");
+      break;
+    case "MatchStarted":
+      if (isMyTurn) play("yourTurn");
+      break;
+    default:
+      break;
+  }
+
+  // Detect "your turn just started" via opponent action — fires after the
+  // primary event sound (e.g. their bank), so the player gets a clear cue.
+  if (!wasMyTurn && isMyTurn && state.lastEvent.kind !== "MatchStarted") {
+    setTimeout(() => play("yourTurn"), 220);
+  }
+}
 
 function RulesTip() {
   const [open, setOpen] = useState(false);
@@ -131,18 +172,32 @@ export default function App() {
   const [selectedIndexes, setSelectedIndexes] = useState<number[]>([]);
   const [copyFeedback, setCopyFeedback] = useState<string>("");
   const [history, setHistory] = useState<HistoryState>(emptyHistory());
+  const [soundOn, setSoundOn] = useState<boolean>(() => isSoundEnabled());
   const currentMatchIdRef = useRef<string | null>(null);
+  const lastVersionRef = useRef<number>(0);
+  const previouslyMyTurnRef = useRef<boolean>(false);
   const clientRef = useRef<GameClient | null>(null);
 
   useEffect(() => {
     const c = new GameClient({
       onState: (s) => {
-        if (currentMatchIdRef.current !== s.matchId) {
+        const isNewMatch = currentMatchIdRef.current !== s.matchId;
+        if (isNewMatch) {
           currentMatchIdRef.current = s.matchId;
           setHistory(reduceHistory(emptyHistory(), s));
+          lastVersionRef.current = 0;
+          previouslyMyTurnRef.current = false;
         } else {
           setHistory((h) => reduceHistory(h, s));
         }
+
+        if (s.version > lastVersionRef.current) {
+          dispatchSounds(s, previouslyMyTurnRef.current);
+          lastVersionRef.current = s.version;
+          previouslyMyTurnRef.current =
+            !!s.youAre && s.activePlayerId === s.youAre && s.phase !== "GameOver";
+        }
+
         setMatch(s);
         setScreen("match");
         setSelectedIndexes([]);
@@ -176,7 +231,9 @@ export default function App() {
       setError(null);
       setBusy(true);
       try {
+        primeAudio();
         await clientRef.current.createRoom(displayName || undefined, targetScore);
+        play("createRoom");
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -252,11 +309,13 @@ export default function App() {
       if (!die || die.locked || die.value === 0) return;
       if (match.phase !== "AwaitingLock") return;
       if (!isYourTurn) return;
+      const wasSelected = selectedIndexes.includes(idx);
       setSelectedIndexes((prev) =>
-        prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx]
+        wasSelected ? prev.filter((i) => i !== idx) : [...prev, idx]
       );
+      play(wasSelected ? "diceDeselect" : "diceSelect");
     },
-    [match, isYourTurn]
+    [match, isYourTurn, selectedIndexes]
   );
 
   const copyRoomCode = useCallback(async () => {
@@ -272,7 +331,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="brand">
+      <header className="brand" onPointerDownCapture={primeAudio}>
         <h1>Dicerio</h1>
         <small>1v1 push-your-luck dice</small>
         {match && match.phase !== "WaitingForOpponent" ? (
@@ -283,6 +342,23 @@ export default function App() {
         <span className="connection-pill" data-state={HubConnectionState[connectionState]}>
           {HubConnectionState[connectionState]}
         </span>
+        <button
+          className="icon-button"
+          type="button"
+          title={soundOn ? "Mute sounds" : "Unmute sounds"}
+          aria-pressed={soundOn}
+          onClick={() => {
+            const next = !soundOn;
+            setSoundEnabled(next);
+            setSoundOn(next);
+            if (next) {
+              primeAudio();
+              play("click");
+            }
+          }}
+        >
+          {soundOn ? "♪ on" : "♪ off"}
+        </button>
         <RulesTip />
       </header>
 
@@ -376,10 +452,10 @@ function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
         <div className="row">
           <input
             type="text"
-            placeholder="ROOM CODE"
+            placeholder="CODE"
             value={roomCode}
             onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-            maxLength={8}
+            maxLength={6}
           />
         </div>
         <input
@@ -391,7 +467,7 @@ function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
         />
         <button
           className="primary"
-          disabled={busy || roomCode.replace(/[^A-Z0-9]/g, "").length < 6}
+          disabled={busy || roomCode.replace(/[^A-Z0-9]/g, "").length < 4}
           onClick={() => void onJoin(roomCode.replace(/[^A-Z0-9]/g, ""), displayName.trim())}
         >
           Join
