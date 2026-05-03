@@ -3,6 +3,7 @@ namespace Dicerio.Engine;
 public enum EngineErrorCode
 {
     NotYourTurn,
+    NotHost,
     WrongPhase,
     EmptyLock,
     InvalidLockIndex,
@@ -10,6 +11,7 @@ public enum EngineErrorCode
     MatchNotStarted,
     MatchAlreadyOver,
     UnknownPlayer,
+    RoomFull,
 }
 
 public sealed record EngineError(EngineErrorCode Code, string Message);

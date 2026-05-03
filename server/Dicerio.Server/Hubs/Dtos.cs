@@ -2,7 +2,7 @@ using Dicerio.Engine;
 
 namespace Dicerio.Server.Hubs;
 
-public sealed record CreateRoomRequest(string? DisplayName, int? TargetScore);
+public sealed record CreateRoomRequest(string? DisplayName, int? TargetScore, int? MaxPlayers);
 
 public sealed record JoinRoomRequest(string RoomCode, string? DisplayName);
 
@@ -24,6 +24,8 @@ public sealed record MatchStateDto(
     string MatchId,
     string RoomCode,
     RuleSetDto Rules,
+    int MaxPlayers,
+    string? HostPlayerId,
     IReadOnlyList<PlayerDto> Players,
     string? ActivePlayerId,
     string Phase,
@@ -34,7 +36,6 @@ public sealed record MatchStateDto(
     long Version,
     long ElapsedMs,
     string? YouAre,
-    int? PendingLockHintTotal,
     IReadOnlyList<int>? ActivePlayerPendingLockIndexes);
 
 public static class Mapper
@@ -55,7 +56,6 @@ public static class Mapper
             .ToList();
 
         var dice = new List<DiceDto>(s.Dice.Count);
-        var bestUnlockedScore = ComputeBestUnlockedScore(s);
         for (var i = 0; i < s.Dice.Count; i++)
         {
             dice.Add(new DiceDto(s.Dice[i].Value, s.Dice[i].Locked, null, null));
@@ -67,6 +67,8 @@ public static class Mapper
             MatchId: s.MatchId,
             RoomCode: s.RoomCode,
             Rules: new RuleSetDto(s.Rules.Id, s.Rules.TargetScore, s.Rules.DiceCount, s.Rules.HotDiceReroll, s.Rules.AllowStraights),
+            MaxPlayers: s.MaxPlayers,
+            HostPlayerId: s.Players.Count > 0 ? s.Players[0].PlayerId : null,
             Players: players,
             ActivePlayerId: s.ActivePlayerId,
             Phase: s.Phase.ToString(),
@@ -77,42 +79,6 @@ public static class Mapper
             Version: s.Version,
             ElapsedMs: elapsedMs,
             YouAre: requesterPlayerId,
-            PendingLockHintTotal: bestUnlockedScore,
             ActivePlayerPendingLockIndexes: activePlayerPendingLockIndexes);
-    }
-
-    private static int? ComputeBestUnlockedScore(MatchState s)
-    {
-        if (s.Phase != MatchPhase.AwaitingLock)
-        {
-            return null;
-        }
-
-        var faces = s.Dice.Where(d => !d.Locked && d.Value != 0).Select(d => d.Value).ToArray();
-        if (faces.Length == 0)
-        {
-            return null;
-        }
-
-        var best = 0;
-        for (var mask = 1; mask < (1 << faces.Length); mask++)
-        {
-            var picked = new List<int>(faces.Length);
-            for (var i = 0; i < faces.Length; i++)
-            {
-                if ((mask & (1 << i)) != 0)
-                {
-                    picked.Add(faces[i]);
-                }
-            }
-
-            var score = Scoring.ScoreLock(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(picked));
-            if (score is not null && score.Points > best)
-            {
-                best = score.Points;
-            }
-        }
-
-        return best == 0 ? null : best;
     }
 }

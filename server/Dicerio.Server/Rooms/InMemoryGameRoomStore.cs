@@ -126,6 +126,34 @@ public sealed class InMemoryGameRoomStore : IGameRoomStore
         }
     }
 
+    /// <summary>
+    /// Drops connection map entries for player ids that are no longer in the match.
+    /// </summary>
+    public void PruneConnectionsToPlayers(string matchId, IReadOnlyCollection<string> validPlayerIds)
+    {
+        if (!_byMatchId.TryGetValue(matchId, out var entry))
+        {
+            return;
+        }
+
+        var valid = validPlayerIds.ToHashSet(StringComparer.Ordinal);
+        lock (entry.Gate)
+        {
+            foreach (var key in entry.ConnectionByPlayer.Keys.ToArray())
+            {
+                if (!valid.Contains(key))
+                {
+                    if (entry.ConnectionByPlayer.TryGetValue(key, out var cid) && cid != null)
+                    {
+                        _membershipByConnection.TryRemove(cid, out _);
+                    }
+
+                    entry.ConnectionByPlayer.Remove(key);
+                }
+            }
+        }
+    }
+
     public Task<RoomMembership?> FindByConnectionAsync(string connectionId, CancellationToken ct = default)
     {
         _membershipByConnection.TryGetValue(connectionId, out var membership);

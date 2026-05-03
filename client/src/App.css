@@ -174,6 +174,37 @@ input[data-invalid="true"] {
   gap: 12px;
 }
 
+.scoreboard-multi {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.waiting-count {
+  margin: 0 0 8px;
+  color: var(--fg-2);
+  font-size: 15px;
+}
+
+.waiting-roster {
+  list-style: none;
+  padding: 0;
+  margin: 12px auto;
+  text-align: left;
+  max-width: 320px;
+}
+
+.waiting-roster li {
+  padding: 4px 0;
+  font-size: 14px;
+}
+
+.gameover-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  align-items: center;
+}
+
 .player-card {
   background: var(--bg-1);
   border-radius: var(--radius);
@@ -369,33 +400,6 @@ input[data-invalid="true"] {
 
 .actions .grow {
   flex: 1;
-}
-
-.event-strip {
-  min-height: 22px;
-  font-size: 14px;
-  color: var(--fg-1);
-}
-
-.event-strip[data-kind="Busted"] {
-  color: var(--bust);
-  font-weight: 600;
-}
-
-.event-strip[data-kind="HotDice"] {
-  color: var(--accent-hot);
-  font-weight: 600;
-}
-
-.event-strip[data-kind="Banked"] {
-  color: var(--good);
-  font-weight: 600;
-}
-
-.event-strip[data-kind="GameOver"],
-.event-strip[data-kind="Forfeit"] {
-  color: var(--gold);
-  font-weight: 700;
 }
 
 .gameover {

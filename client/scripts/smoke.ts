@@ -75,7 +75,7 @@ async function main() {
 
   const create = await host.conn.invoke<{ roomCode: string; matchId: string; playerId: string }>(
     "CreateRoom",
-    { displayName: "Host", targetScore: TARGET }
+    { displayName: "Host", targetScore: TARGET, maxPlayers: null }
   );
   const join = await guest.conn.invoke<{ roomCode: string; matchId: string; playerId: string }>(
     "JoinRoom",

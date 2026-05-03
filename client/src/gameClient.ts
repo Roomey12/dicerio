@@ -64,11 +64,16 @@ export class GameClient {
     }
   }
 
-  async createRoom(displayName: string | undefined, targetScore: number | undefined): Promise<CreateRoomResult> {
+  async createRoom(
+    displayName: string | undefined,
+    targetScore: number | undefined,
+    maxPlayers?: number
+  ): Promise<CreateRoomResult> {
     await this.ensureStarted();
     return this.connection.invoke<CreateRoomResult>(HubMethods.CreateRoom, {
       displayName: displayName ?? null,
       targetScore: targetScore ?? null,
+      maxPlayers: maxPlayers ?? null,
     });
   }
 
@@ -94,6 +99,14 @@ export class GameClient {
 
   async previewLock(diceIndexes: number[]): Promise<void> {
     await this.connection.invoke(HubMethods.PreviewLock, diceIndexes);
+  }
+
+  async startMatch(): Promise<void> {
+    await this.connection.invoke(HubMethods.StartMatch);
+  }
+
+  async playAgain(): Promise<void> {
+    await this.connection.invoke(HubMethods.PlayAgain);
   }
 
   async leave(): Promise<void> {

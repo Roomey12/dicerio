@@ -57,6 +57,7 @@ public sealed record MatchState(
     string MatchId,
     string RoomCode,
     RuleSet Rules,
+    int MaxPlayers,
     IReadOnlyList<Player> Players,
     string? ActivePlayerId,
     MatchPhase Phase,
@@ -75,9 +76,6 @@ public sealed record MatchState(
 
     public Player? GetPlayer(string playerId) =>
         Players.FirstOrDefault(p => p.PlayerId == playerId);
-
-    public Player? Opponent(string playerId) =>
-        Players.FirstOrDefault(p => p.PlayerId != playerId);
 
     public bool IsActive(string playerId) => ActivePlayerId == playerId;
 }

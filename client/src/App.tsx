@@ -2,12 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HubConnectionState } from "@microsoft/signalr";
 import "./App.css";
 import { GameClient } from "./gameClient";
-import type {
-  HubErrorPayload,
-  LastEventKind,
-  MatchPhase,
-  MatchStateDto,
-} from "./protocol";
+import type { HubErrorPayload, MatchPhase, MatchStateDto } from "./protocol";
 import { Die } from "./components/Die";
 import {
   emptyHistory,
@@ -17,6 +12,26 @@ import {
   type HistoryState,
 } from "./history";
 import { isSoundEnabled, play, primeAudio, setSoundEnabled } from "./sounds";
+
+const DISPLAY_NAME_KEY = "dicerio_display_name";
+
+function readStoredDisplayName(): string {
+  try {
+    return localStorage.getItem(DISPLAY_NAME_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredDisplayName(name: string): void {
+  try {
+    const t = name.trim();
+    if (!t) localStorage.removeItem(DISPLAY_NAME_KEY);
+    else localStorage.setItem(DISPLAY_NAME_KEY, t.slice(0, 24));
+  } catch {
+    /* ignore */
+  }
+}
 
 type Screen = "lobby" | "match";
 
@@ -135,34 +150,6 @@ function deepLinkCode(): string | null {
   return raw.trim().toUpperCase();
 }
 
-function eventLabel(kind: LastEventKind, players: { playerId: string; displayName: string }[], event: MatchStateDto["lastEvent"]): string {
-  const who = event.playerId
-    ? players.find((p) => p.playerId === event.playerId)?.displayName ?? "Player"
-    : "";
-  switch (kind) {
-    case "PlayerJoined":
-      return `${who} joined`;
-    case "MatchStarted":
-      return `${who} starts`;
-    case "Rolled":
-      return `${who} rolled`;
-    case "Locked":
-      return `${who} locked +${event.points ?? 0}`;
-    case "Banked":
-      return `${who} banked ${event.points ?? 0}`;
-    case "Busted":
-      return `${who} busted — turn lost`;
-    case "HotDice":
-      return `${who} got hot dice — reroll all six`;
-    case "GameOver":
-      return event.message ?? `${who} wins`;
-    case "Forfeit":
-      return event.message ?? `${who} forfeited`;
-    default:
-      return "";
-  }
-}
-
 export default function App() {
   const [connectionState, setConnectionState] = useState<HubConnectionState>(HubConnectionState.Disconnected);
   const [screen, setScreen] = useState<Screen>("lobby");
@@ -178,21 +165,28 @@ export default function App() {
   const previouslyMyTurnRef = useRef<boolean>(false);
   const clientRef = useRef<GameClient | null>(null);
   const wasAwaitingLockMyTurnRef = useRef(false);
+  const prevPhaseRef = useRef<MatchPhase | null>(null);
 
   useEffect(() => {
     const c = new GameClient({
       onState: (s) => {
         const isNewMatch = currentMatchIdRef.current !== s.matchId;
         const versionBumped = isNewMatch || s.version > lastVersionRef.current;
+        const prevPhase = prevPhaseRef.current;
         if (isNewMatch) {
           currentMatchIdRef.current = s.matchId;
           setHistory(reduceHistory(emptyHistory(), s));
           lastVersionRef.current = 0;
           previouslyMyTurnRef.current = false;
           wasAwaitingLockMyTurnRef.current = false;
+          prevPhaseRef.current = null;
+        } else if (prevPhase === "GameOver" && s.phase === "AwaitingRoll") {
+          setHistory(reduceHistory(emptyHistory(), s));
         } else {
           setHistory((h) => reduceHistory(h, s));
         }
+
+        prevPhaseRef.current = s.phase;
 
         if (s.version > lastVersionRef.current) {
           dispatchSounds(s, previouslyMyTurnRef.current);
@@ -208,6 +202,15 @@ export default function App() {
         }
       },
       onError: (e: HubErrorPayload) => {
+        if (e.code === "HostLeft") {
+          setMatch(null);
+          setScreen("lobby");
+          setHistory(emptyHistory());
+          currentMatchIdRef.current = null;
+          prevPhaseRef.current = null;
+          setError(e.message);
+          return;
+        }
         setError(`${e.code}: ${e.message}`);
       },
       onMatchEnded: () => {
@@ -251,13 +254,14 @@ export default function App() {
   }, [match]);
 
   const handleCreate = useCallback(
-    async (displayName: string, targetScore: number | undefined) => {
+    async (displayName: string, targetScore: number | undefined, maxPlayers: number) => {
       if (!clientRef.current) return;
       setError(null);
       setBusy(true);
       try {
         primeAudio();
-        await clientRef.current.createRoom(displayName || undefined, targetScore);
+        writeStoredDisplayName(displayName);
+        await clientRef.current.createRoom(displayName || undefined, targetScore, maxPlayers);
         play("createRoom");
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -274,6 +278,7 @@ export default function App() {
       setError(null);
       setBusy(true);
       try {
+        writeStoredDisplayName(displayName);
         await clientRef.current.joinRoom(roomCode, displayName || undefined);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
@@ -294,6 +299,7 @@ export default function App() {
       setSelectedIndexes([]);
       setHistory(emptyHistory());
       currentMatchIdRef.current = null;
+      prevPhaseRef.current = null;
     }
   }, []);
 
@@ -322,6 +328,26 @@ export default function App() {
     setError(null);
     try {
       await clientRef.current.bank();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const handleStartMatch = useCallback(async () => {
+    if (!clientRef.current) return;
+    setError(null);
+    try {
+      await clientRef.current.startMatch();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const handlePlayAgain = useCallback(async () => {
+    if (!clientRef.current) return;
+    setError(null);
+    try {
+      await clientRef.current.playAgain();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -358,7 +384,7 @@ export default function App() {
     <div className="app">
       <header className="brand" onPointerDownCapture={primeAudio}>
         <h1>Dicerio</h1>
-        <small>1v1 push-your-luck dice</small>
+        <small>2–5 players · push-your-luck dice</small>
         {match && match.phase !== "WaitingForOpponent" ? (
           <span className="target-pill" title="First to this score wins">
             first to {match.rules.targetScore.toLocaleString()}
@@ -390,7 +416,13 @@ export default function App() {
       {screen === "lobby" || !match ? (
         <Lobby onCreate={handleCreate} onJoin={handleJoin} busy={busy} error={error} />
       ) : match.phase === "WaitingForOpponent" ? (
-        <Waiting code={match.roomCode} onCopy={copyRoomCode} copyFeedback={copyFeedback} onLeave={handleLeave} />
+        <Waiting
+          state={match}
+          onCopy={copyRoomCode}
+          copyFeedback={copyFeedback}
+          onStart={handleStartMatch}
+          onLeave={handleLeave}
+        />
       ) : (
         <Board
           state={match}
@@ -400,6 +432,7 @@ export default function App() {
           onRoll={handleRoll}
           onSubmitLock={handleSubmitLock}
           onBank={handleBank}
+          onPlayAgain={handlePlayAgain}
           onLeave={handleLeave}
           error={error}
           youHaveScoringDie={youHaveScoringDie}
@@ -411,7 +444,7 @@ export default function App() {
 }
 
 interface LobbyProps {
-  onCreate: (displayName: string, targetScore: number | undefined) => Promise<void>;
+  onCreate: (displayName: string, targetScore: number | undefined, maxPlayers: number) => Promise<void>;
   onJoin: (roomCode: string, displayName: string) => Promise<void>;
   busy: boolean;
   error: string | null;
@@ -419,11 +452,14 @@ interface LobbyProps {
 
 const TARGET_MIN = 100;
 const TARGET_MAX = 100_000;
+const LOBBY_MIN = 2;
+const LOBBY_MAX = 5;
 
 function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
-  const [displayName, setDisplayName] = useState<string>("");
+  const [displayName, setDisplayName] = useState<string>(() => readStoredDisplayName());
   const [roomCode, setRoomCode] = useState<string>("");
   const [targetScore, setTargetScore] = useState<string>("3000");
+  const [maxPlayers, setMaxPlayers] = useState<string>("2");
 
   useEffect(() => {
     const code = deepLinkCode();
@@ -433,6 +469,9 @@ function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
   const parsedTarget = parseInt(targetScore, 10);
   const targetValid =
     Number.isFinite(parsedTarget) && parsedTarget >= TARGET_MIN && parsedTarget <= TARGET_MAX;
+  const parsedMax = parseInt(maxPlayers, 10);
+  const maxValid =
+    Number.isFinite(parsedMax) && parsedMax >= LOBBY_MIN && parsedMax <= LOBBY_MAX;
 
   return (
     <>
@@ -442,9 +481,29 @@ function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
           type="text"
           placeholder="Display name (optional)"
           value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setDisplayName(v);
+            writeStoredDisplayName(v);
+          }}
           maxLength={24}
         />
+        <div className="options">
+          <label htmlFor="maxp">Max players</label>
+          <input
+            id="maxp"
+            type="text"
+            inputMode="numeric"
+            value={maxPlayers}
+            data-invalid={!maxValid}
+            onChange={(e) => setMaxPlayers(e.target.value.replace(/\D/g, "").slice(0, 1))}
+          />
+        </div>
+        {!maxValid ? (
+          <div className="hint" data-invalid="true">
+            Choose {LOBBY_MIN}–{LOBBY_MAX} players (default {LOBBY_MIN}).
+          </div>
+        ) : null}
         <div className="options">
           <label htmlFor="target">Target score</label>
           <input
@@ -463,9 +522,9 @@ function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
         ) : null}
         <button
           className="primary"
-          disabled={busy || !targetValid}
+          disabled={busy || !targetValid || !maxValid}
           onClick={() => {
-            void onCreate(displayName.trim(), parsedTarget);
+            void onCreate(displayName.trim(), parsedTarget, parsedMax);
           }}
         >
           Create room
@@ -487,7 +546,11 @@ function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
           type="text"
           placeholder="Display name (optional)"
           value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setDisplayName(v);
+            writeStoredDisplayName(v);
+          }}
           maxLength={24}
         />
         <button
@@ -504,26 +567,51 @@ function Lobby({ onCreate, onJoin, busy, error }: LobbyProps) {
 }
 
 interface WaitingProps {
-  code: string;
+  state: MatchStateDto;
   onCopy: () => void;
   copyFeedback: string;
+  onStart: () => void;
   onLeave: () => void;
 }
 
-function Waiting({ code, onCopy, copyFeedback, onLeave }: WaitingProps) {
+function Waiting({ state, onCopy, copyFeedback, onStart, onLeave }: WaitingProps) {
+  const isHost = !!state.youAre && state.youAre === state.hostPlayerId;
+  const count = state.players.length;
+  const canStartEarly = isHost && count >= 2 && count < state.maxPlayers && state.phase === "WaitingForOpponent";
+
   return (
     <div className="lobby waiting">
-      <h2>Waiting for opponent</h2>
-      <div className="room-code">{code}</div>
+      <h2>Waiting for players</h2>
+      <p className="waiting-count">
+        {count} / {state.maxPlayers} joined
+      </p>
+      <div className="room-code">{state.roomCode}</div>
       <div className="copy-feedback">{copyFeedback}</div>
-      <button className="ghost" onClick={onCopy}>
+      <button className="ghost" type="button" onClick={onCopy}>
         Copy room code
       </button>
       <div className="room-code-hint">
-        Share the code (or this URL with <code>?code={code}</code>)
+        Share the code (or this URL with <code>?code={state.roomCode}</code>)
       </div>
-      <button className="danger" onClick={onLeave}>
-        Cancel room
+      <ul className="waiting-roster">
+        {state.players
+          .slice()
+          .sort((a, b) => a.seat - b.seat)
+          .map((p) => (
+            <li key={p.playerId} data-you={state.youAre === p.playerId} data-host={state.hostPlayerId === p.playerId}>
+              {p.displayName}
+              {state.hostPlayerId === p.playerId ? " · host" : ""}
+              {!p.connected ? " · offline" : ""}
+            </li>
+          ))}
+      </ul>
+      {canStartEarly ? (
+        <button className="primary" type="button" onClick={() => void onStart()}>
+          Start game ({count} players)
+        </button>
+      ) : null}
+      <button className="danger" type="button" onClick={onLeave}>
+        {isHost ? "Cancel room" : "Leave"}
       </button>
     </div>
   );
@@ -537,6 +625,7 @@ interface BoardProps {
   onRoll: () => void;
   onSubmitLock: () => void;
   onBank: () => void;
+  onPlayAgain: () => void;
   onLeave: () => void;
   error: string | null;
   youHaveScoringDie: boolean;
@@ -551,17 +640,19 @@ function Board({
   onRoll,
   onSubmitLock,
   onBank,
+  onPlayAgain,
   onLeave,
   error,
   youHaveScoringDie,
   history,
 }: BoardProps) {
-  const [me, opponent] = useMemo(() => {
-    if (!state.youAre) return [state.players[0], state.players[1]];
-    const meIdx = state.players.findIndex((p) => p.playerId === state.youAre);
-    if (meIdx < 0) return [state.players[0], state.players[1]];
-    return [state.players[meIdx], state.players[(meIdx + 1) % state.players.length]];
-  }, [state]);
+  const orderedPlayers = useMemo(
+    () => [...state.players].sort((a, b) => a.seat - b.seat),
+    [state.players]
+  );
+  const activeName =
+    state.players.find((p) => p.playerId === state.activePlayerId)?.displayName ?? "Player";
+  const isHost = !!state.youAre && state.youAre === state.hostPlayerId;
 
   const canRoll = isYourTurn && state.phase === "AwaitingRoll" && state.phase !== ("GameOver" as MatchPhase);
   const canLock = isYourTurn && state.phase === "AwaitingLock" && selectedIndexes.length > 0;
@@ -582,9 +673,9 @@ function Board({
         state.activePlayerPendingLockIndexes &&
         state.activePlayerPendingLockIndexes.length > 0
       ) {
-        return `${opponent?.displayName ?? "Opponent"} picking lock…`;
+        return `${activeName} picking lock…`;
       }
-      return `${opponent?.displayName ?? "Opponent"}'s turn`;
+      return `${activeName}'s turn`;
     }
     if (state.phase === "AwaitingRoll") {
       return state.turnScore > 0 ? "Roll again or bank" : "Roll the dice";
@@ -595,13 +686,10 @@ function Board({
     return "";
   })();
 
-  const eventText = eventLabel(state.lastEvent.kind, state.players, state.lastEvent);
-
   return (
     <div className="board">
-      <div className="scoreboard">
-        {[me, opponent].map((p, i) => {
-          if (!p) return <div key={i} className="player-card" />;
+      <div className="scoreboard scoreboard-multi">
+        {orderedPlayers.map((p) => {
           const isActive = state.activePlayerId === p.playerId;
           const isYou = state.youAre === p.playerId;
           const pct = Math.min(100, Math.round((p.matchScore / state.rules.targetScore) * 100));
@@ -622,13 +710,7 @@ function Board({
                 <div className="score-bar-fill" style={{ width: `${pct}%` }} />
               </div>
               <div className="turn">
-                {isActive
-                  ? `turn: +${state.turnScore.toLocaleString()}${
-                      state.pendingLockHintTotal != null
-                        ? ` · best lock: ${state.pendingLockHintTotal}`
-                        : ""
-                    }`
-                  : "waiting"}
+                {isActive ? `turn: +${state.turnScore.toLocaleString()}` : "waiting"}
               </div>
             </div>
           );
@@ -661,10 +743,6 @@ function Board({
               />
             );
           })}
-        </div>
-
-        <div className="event-strip" data-kind={state.lastEvent.kind}>
-          {eventText}
         </div>
 
         <div className="actions">
@@ -705,7 +783,7 @@ function Board({
             {state.winnerId
               ? state.winnerId === state.youAre
                 ? "You win!"
-                : `${state.players.find((p) => p.playerId === state.winnerId)?.displayName ?? "Opponent"} wins`
+                : `${state.players.find((p) => p.playerId === state.winnerId)?.displayName ?? "Player"} wins`
               : "Match over"}
           </h2>
           <div>
@@ -713,9 +791,18 @@ function Board({
               .map((p) => `${p.displayName}: ${p.matchScore.toLocaleString()}`)
               .join("  ·  ")}
           </div>
-          <button className="primary" onClick={onLeave}>
-            Back to lobby
-          </button>
+          <div className="gameover-actions">
+            {isHost ? (
+              <button className="primary" type="button" onClick={() => void onPlayAgain()}>
+                Play again
+              </button>
+            ) : (
+              <p className="hint">Only the host can start a rematch.</p>
+            )}
+            <button className="ghost" type="button" onClick={onLeave}>
+              Back to lobby
+            </button>
+          </div>
         </div>
       ) : null}
 

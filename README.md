@@ -87,10 +87,9 @@ Notes:
 
 ### Server authority & security
 
-- The server owns dice faces, turn ownership, all scoring, all phase transitions, and the win check. The client sends only intents (`CreateRoom`, `JoinRoom`, `RollAgain`, `SubmitLock`, `Bank`, `LeaveRoom`).
+- The server owns dice faces, turn ownership, all scoring, all phase transitions, and the win check. The client sends only intents (`CreateRoom`, `JoinRoom`, `RollAgain`, `SubmitLock`, `PreviewLock`, `Bank`, `LeaveRoom`).
 - `MatchStateDto` is what the client renders; it is recomputed from the canonical engine state on every transition. The server **never** trusts a client-provided score, dice value, phase, or active player.
 - Rolls use `RandomNumberGenerator.GetInt32(1, 7)`. First-seat selection uses `RandomNumberGenerator.GetInt32(0, 2)`.
-- The server also computes `pendingLockHintTotal` (best score available among the currently-rolled unlocked dice). It's read-only and only used for UI highlighting; the lock submission is re-validated on every action.
 
 ### Engine
 
@@ -138,12 +137,12 @@ Open two browser windows (or one Chrome + one Firefox/incognito) at `http://loca
 
 1. **Host:** type a name → `Create room`. Confirm the 4-char room code is shown big, copy button works, `?code=…` URL hint is visible. State should show `WaitingForOpponent`.
 2. **Guest:** paste the code → `Join`. Both windows should now show the dice board, identical scores, and the same active-player highlight.
-3. **Active player rolls.** Confirm only their unlocked dice get values; the inactive player sees the same dice but their action buttons are disabled. The `event-strip` says "X rolled".
+3. **Active player rolls.** Confirm only their unlocked dice get values; the inactive player sees the same dice but their action buttons are disabled.
 4. **Lock a non-scoring die** (try selecting a `2` and a `3` and pressing Lock). Confirm the inactive client's state doesn't change; the active client sees a `GameError` with code `InvalidLockPartition`.
 5. **Lock a scoring die** (e.g. a single `1`). Confirm turn score increments by the right amount, dice grid shows the locked die in green, phase is `AwaitingRoll`.
 6. **Roll again.** Confirm only the unlocked dice get re-rolled; the locked die keeps its face and `locked` flag.
 7. **Force a bust:** keep rolling until you see "X busted — turn lost". Confirm the active player loses **only** turn score (match score unchanged), turn passes, dice show the busted faces until the new active player rolls.
-8. **Hot dice:** lock all six dice in one roll (best chance: roll a straight and lock all six). Confirm the event banner says "hot dice" and all six dice clear and you can roll again with the turn score preserved.
+8. **Hot dice:** lock all six dice in one roll (best chance: roll a straight and lock all six). Confirm all six dice clear and you can roll again with the turn score preserved.
 9. **Bank.** Confirm match score increments by the turn score, turn passes, dice clear, turn score resets to 0.
 10. **Win.** Use a small target score (e.g. 1 000 in lobby options) and play to a banked total ≥ 1 000. Confirm `phase=GameOver`, `winnerId` set, both clients show the same winner card.
 11. **Disconnect / forfeit.** Mid-match, close the active player's browser tab. Confirm the other window briefly shows them as offline then transitions to `GameOver` with `LastEventKind.Forfeit` and the surviving player as the winner.

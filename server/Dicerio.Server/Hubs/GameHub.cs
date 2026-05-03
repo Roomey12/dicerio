@@ -50,16 +50,21 @@ public sealed class GameHub : Hub
         var membership = await _store.FindByConnectionAsync(Context.ConnectionId);
         if (membership is not null)
         {
-            await _store.SetConnectionAsync(membership.MatchId, membership.PlayerId, null);
-            _store.ClearPendingLockSelection(membership.MatchId);
+            var matchId = membership.MatchId;
+            await _store.SetConnectionAsync(matchId, membership.PlayerId, null);
+            _store.ClearPendingLockSelection(matchId);
 
-            var state = await _store.FindByMatchIdAsync(membership.MatchId);
-            if (state is { Phase: MatchPhase.AwaitingRoll or MatchPhase.AwaitingLock })
+            var state = await _store.FindByMatchIdAsync(matchId);
+            if (state is { Phase: MatchPhase.WaitingForOpponent })
+            {
+                await HandleLobbyDisconnectAsync(matchId, membership.PlayerId, state);
+            }
+            else if (state is { Phase: MatchPhase.AwaitingRoll or MatchPhase.AwaitingLock })
             {
                 _logger.LogInformation("Player {PlayerId} disconnected mid-match {MatchId}; forfeiting.",
-                    membership.PlayerId, membership.MatchId);
+                    membership.PlayerId, matchId);
 
-                var updated = await _store.UpdateAsync(membership.MatchId, s =>
+                var updated = await _store.UpdateAsync(matchId, s =>
                 {
                     var r = FarkleEngine.Forfeit(s, membership.PlayerId, "Player disconnected");
                     return r.IsOk ? r.State! : s;
@@ -111,11 +116,15 @@ public sealed class GameHub : Hub
             }
         }
 
+        var maxPlayers = request.MaxPlayers is int mp
+            ? Math.Clamp(mp, FarkleEngine.MinPlayers, FarkleEngine.MaxPlayersAllowed)
+            : FarkleEngine.MinPlayers;
+
         var matchId = Guid.NewGuid().ToString("n");
         var hostPlayerId = $"p-{Guid.NewGuid():n}";
         var host = new Player(hostPlayerId, displayName, Seat: 0, MatchScore: 0);
 
-        var initial = FarkleEngine.CreateMatch(matchId, roomCode, rules, host);
+        var initial = FarkleEngine.CreateMatch(matchId, roomCode, rules, host, maxPlayers);
         await _store.CreateAsync(initial, Context.ConnectionId);
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(matchId));
 
@@ -146,17 +155,17 @@ public sealed class GameHub : Hub
 
         if (state.Phase != MatchPhase.WaitingForOpponent)
         {
-            if (state.Players.Count >= 2)
-            {
-                throw new HubException("RoomFull: this room already has two players.");
-            }
-
             throw new HubException("GameAlreadyStarted: cannot join a match in progress.");
+        }
+
+        if (state.Players.Count >= state.MaxPlayers)
+        {
+            throw new HubException("RoomFull: this room is full.");
         }
 
         var displayName = SanitizeName(request.DisplayName) ?? "Guest";
         var guestPlayerId = $"p-{Guid.NewGuid():n}";
-        var guest = new Player(guestPlayerId, displayName, Seat: 1, MatchScore: 0);
+        var guest = new Player(guestPlayerId, displayName, Seat: state.Players.Count, MatchScore: 0);
 
         MatchState? updated = null;
         await _store.UpdateAsync(state.MatchId, s =>
@@ -233,6 +242,88 @@ public sealed class GameHub : Hub
         await BroadcastState(state);
     }
 
+    public async Task StartMatch()
+    {
+        var membership = await _store.FindByConnectionAsync(Context.ConnectionId);
+        if (membership is null)
+        {
+            await Clients.Caller.SendAsync(ServerEventError,
+                new HubErrorPayload("NoMembership", "You are not currently in a match."));
+            return;
+        }
+
+        EngineError? error = null;
+        var updated = await _store.UpdateAsync(membership.MatchId, s =>
+        {
+            var r = FarkleEngine.StartLobbyMatch(s, membership.PlayerId, _roller);
+            if (!r.IsOk)
+            {
+                error = r.Error;
+                return s;
+            }
+
+            return r.State!;
+        });
+
+        if (updated is null)
+        {
+            await Clients.Caller.SendAsync(ServerEventError,
+                new HubErrorPayload("RoomNotFound", "Match no longer exists."));
+            return;
+        }
+
+        if (error is not null)
+        {
+            await Clients.Caller.SendAsync(ServerEventError,
+                new HubErrorPayload(error.Code.ToString(), error.Message));
+            return;
+        }
+
+        _store.ClearPendingLockSelection(membership.MatchId);
+        await BroadcastState(updated);
+    }
+
+    public async Task PlayAgain()
+    {
+        var membership = await _store.FindByConnectionAsync(Context.ConnectionId);
+        if (membership is null)
+        {
+            await Clients.Caller.SendAsync(ServerEventError,
+                new HubErrorPayload("NoMembership", "You are not currently in a match."));
+            return;
+        }
+
+        EngineError? error = null;
+        var updated = await _store.UpdateAsync(membership.MatchId, s =>
+        {
+            var r = FarkleEngine.Rematch(s, membership.PlayerId, _roller);
+            if (!r.IsOk)
+            {
+                error = r.Error;
+                return s;
+            }
+
+            return r.State!;
+        });
+
+        if (updated is null)
+        {
+            await Clients.Caller.SendAsync(ServerEventError,
+                new HubErrorPayload("RoomNotFound", "Match no longer exists."));
+            return;
+        }
+
+        if (error is not null)
+        {
+            await Clients.Caller.SendAsync(ServerEventError,
+                new HubErrorPayload(error.Code.ToString(), error.Message));
+            return;
+        }
+
+        _store.ClearPendingLockSelection(membership.MatchId);
+        await BroadcastState(updated);
+    }
+
     public async Task LeaveRoom()
     {
         var membership = await _store.FindByConnectionAsync(Context.ConnectionId);
@@ -241,14 +332,62 @@ public sealed class GameHub : Hub
             return;
         }
 
-        await _store.SetConnectionAsync(membership.MatchId, membership.PlayerId, null);
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(membership.MatchId));
+        var matchId = membership.MatchId;
+        var playerId = membership.PlayerId;
+        await _store.SetConnectionAsync(matchId, playerId, null);
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(matchId));
 
-        var updated = await _store.UpdateAsync(membership.MatchId, s =>
+        var state = await _store.FindByMatchIdAsync(matchId);
+        if (state is null)
+        {
+            return;
+        }
+
+        if (state.Phase == MatchPhase.WaitingForOpponent)
+        {
+            var isHost = state.Players.Count > 0 && state.Players[0].PlayerId == playerId;
+            if (isHost && state.Players.Count > 1)
+            {
+                await _hubContext.Clients.Group(GroupName(matchId)).SendAsync(ServerEventError,
+                    new HubErrorPayload("HostLeft", "The host closed the room."));
+                await TearDownMatchAsync(matchId);
+                return;
+            }
+
+            if (isHost && state.Players.Count == 1)
+            {
+                await TearDownMatchAsync(matchId);
+                return;
+            }
+
+            var left = await _store.UpdateAsync(matchId, s =>
+            {
+                var r = FarkleEngine.LeaveLobby(s, playerId);
+                return r.IsOk ? r.State! : s;
+            });
+
+            if (left is null)
+            {
+                return;
+            }
+
+            if (left.Players.Count == 0)
+            {
+                await TearDownMatchAsync(matchId);
+                return;
+            }
+
+            _store.PruneConnectionsToPlayers(matchId, left.Players.Select(p => p.PlayerId).ToList());
+            _store.ClearPendingLockSelection(matchId);
+            await BroadcastState(left);
+            return;
+        }
+
+        var updated = await _store.UpdateAsync(matchId, s =>
         {
             if (s.Phase is MatchPhase.AwaitingRoll or MatchPhase.AwaitingLock)
             {
-                var r = FarkleEngine.Forfeit(s, membership.PlayerId, "Player left");
+                var r = FarkleEngine.Forfeit(s, playerId, "Player left");
                 return r.IsOk ? r.State! : s;
             }
 
@@ -257,7 +396,7 @@ public sealed class GameHub : Hub
 
         if (updated is not null)
         {
-            _store.ClearPendingLockSelection(updated.MatchId);
+            _store.ClearPendingLockSelection(matchId);
             await BroadcastState(updated);
         }
     }
@@ -399,6 +538,59 @@ public sealed class GameHub : Hub
         {
             await Clients.Group(GroupName(state.MatchId)).SendAsync(ServerEventMatchEnded, state.WinnerId);
         }
+    }
+
+    private async Task TearDownMatchAsync(string matchId)
+    {
+        var g = GroupName(matchId);
+        foreach (var (_, cid) in ConnectionsFor(matchId).ToList())
+        {
+            if (cid is not null)
+            {
+                await _hubContext.Groups.RemoveFromGroupAsync(cid, g);
+            }
+        }
+
+        await _store.RemoveAsync(matchId);
+    }
+
+    private async Task HandleLobbyDisconnectAsync(string matchId, string playerId, MatchState state)
+    {
+        var isHost = state.Players.Count > 0 && state.Players[0].PlayerId == playerId;
+        if (isHost && state.Players.Count > 1)
+        {
+            await _hubContext.Clients.Group(GroupName(matchId)).SendAsync(ServerEventError,
+                new HubErrorPayload("HostLeft", "The host disconnected; room closed."));
+            await TearDownMatchAsync(matchId);
+            return;
+        }
+
+        if (isHost && state.Players.Count == 1)
+        {
+            await TearDownMatchAsync(matchId);
+            return;
+        }
+
+        var left = await _store.UpdateAsync(matchId, s =>
+        {
+            var r = FarkleEngine.LeaveLobby(s, playerId);
+            return r.IsOk ? r.State! : s;
+        });
+
+        if (left is null)
+        {
+            return;
+        }
+
+        if (left.Players.Count == 0)
+        {
+            await TearDownMatchAsync(matchId);
+            return;
+        }
+
+        _store.PruneConnectionsToPlayers(matchId, left.Players.Select(p => p.PlayerId).ToList());
+        _store.ClearPendingLockSelection(matchId);
+        await BroadcastState(left);
     }
 
     private static string? SanitizeName(string? raw)

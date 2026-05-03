@@ -54,6 +54,8 @@ export interface MatchStateDto {
   matchId: string;
   roomCode: string;
   rules: RuleSetDto;
+  maxPlayers: number;
+  hostPlayerId: string | null;
   players: PlayerDto[];
   activePlayerId: string | null;
   phase: MatchPhase;
@@ -66,7 +68,6 @@ export interface MatchStateDto {
    *  the same value for the same broadcast, so history rows align across tabs. */
   elapsedMs: number;
   youAre: string | null;
-  pendingLockHintTotal: number | null;
   /** Die indices the active player is highlighting before Lock (AwaitingLock only). */
   activePlayerPendingLockIndexes: number[] | null;
 }
@@ -102,4 +103,6 @@ export const HubMethods = {
   Bank: "Bank",
   LeaveRoom: "LeaveRoom",
   PreviewLock: "PreviewLock",
+  StartMatch: "StartMatch",
+  PlayAgain: "PlayAgain",
 } as const;

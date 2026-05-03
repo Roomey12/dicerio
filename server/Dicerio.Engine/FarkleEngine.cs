@@ -1,27 +1,33 @@
 namespace Dicerio.Engine;
 
 /// <summary>
-/// Pure-ish state machine for a 2-player Farkle match. Methods take the current
+/// Pure-ish state machine for a multiplayer Farkle match (2–5 players). Methods take the current
 /// <see cref="MatchState"/> plus an action and return a new state or an error.
 /// All randomness flows through <see cref="IDiceRoller"/> for testability.
 /// </summary>
 public static class FarkleEngine
 {
+    public const int MinPlayers = 2;
+    public const int MaxPlayersAllowed = 5;
+
     public static MatchState CreateMatch(
         string matchId,
         string roomCode,
         RuleSet rules,
         Player host,
+        int maxPlayers = MinPlayers,
         DateTime? startedAtUtc = null)
     {
         var dice = new Die[rules.DiceCount];
         Array.Fill(dice, Die.Empty);
+        var cap = Math.Clamp(maxPlayers, MinPlayers, MaxPlayersAllowed);
 
         return new MatchState(
             MatchId: matchId,
             RoomCode: roomCode,
             Rules: rules,
-            Players: [host],
+            MaxPlayers: cap,
+            Players: [host with { Seat = 0 }],
             ActivePlayerId: null,
             Phase: MatchPhase.WaitingForOpponent,
             Dice: dice,
@@ -38,21 +44,142 @@ public static class FarkleEngine
     {
         if (state.Phase != MatchPhase.WaitingForOpponent)
         {
-            return EngineResult.Fail(EngineErrorCode.WrongPhase, "Match already has both players.");
+            return EngineResult.Fail(EngineErrorCode.WrongPhase, "Match is not accepting joins.");
         }
 
-        var players = new List<Player>(state.Players) { opponent };
-        var firstSeat = roller.Next(2);
-        var activePlayerId = players[firstSeat].PlayerId;
+        if (state.Players.Count >= state.MaxPlayers)
+        {
+            return EngineResult.Fail(EngineErrorCode.RoomFull, "Room is full.");
+        }
+
+        var seat = state.Players.Count;
+        var joined = opponent with { Seat = seat };
+        var players = new List<Player>(state.Players) { joined };
+
+        if (players.Count == state.MaxPlayers)
+        {
+            var firstSeat = roller.Next(players.Count);
+            var activePlayerId = players[firstSeat].PlayerId;
+
+            return EngineResult.Ok(state with
+            {
+                Players = players,
+                ActivePlayerId = activePlayerId,
+                Phase = MatchPhase.AwaitingRoll,
+                Dice = FreshDice(state.Rules.DiceCount),
+                TurnScore = 0,
+                LastEvent = new LastEvent(LastEventKind.MatchStarted, activePlayerId, null, "Match started"),
+                Version = state.Version + 1,
+            });
+        }
 
         return EngineResult.Ok(state with
         {
             Players = players,
+            ActivePlayerId = null,
+            Phase = MatchPhase.WaitingForOpponent,
+            LastEvent = new LastEvent(LastEventKind.PlayerJoined, joined.PlayerId, null, $"{joined.DisplayName} joined"),
+            Version = state.Version + 1,
+        });
+    }
+
+    /// <summary>
+    /// Host-only: start the match early when at least two players have joined but the room is not full.
+    /// </summary>
+    public static EngineResult StartLobbyMatch(MatchState state, string hostPlayerId, IDiceRoller roller)
+    {
+        if (state.Phase != MatchPhase.WaitingForOpponent)
+        {
+            return EngineResult.Fail(EngineErrorCode.WrongPhase, "Match has already started.");
+        }
+
+        if (state.Players.Count == 0 || state.Players[0].PlayerId != hostPlayerId)
+        {
+            return EngineResult.Fail(EngineErrorCode.NotHost, "Only the host can start the match.");
+        }
+
+        if (state.Players.Count < MinPlayers)
+        {
+            return EngineResult.Fail(EngineErrorCode.WrongPhase, "Need at least two players to start.");
+        }
+
+        if (state.Players.Count == state.MaxPlayers)
+        {
+            return EngineResult.Fail(EngineErrorCode.WrongPhase, "Room is already full; match should have started.");
+        }
+
+        var players = state.Players.ToList();
+        var firstSeat = roller.Next(players.Count);
+        var activePlayerId = players[firstSeat].PlayerId;
+
+        return EngineResult.Ok(state with
+        {
             ActivePlayerId = activePlayerId,
             Phase = MatchPhase.AwaitingRoll,
             Dice = FreshDice(state.Rules.DiceCount),
             TurnScore = 0,
             LastEvent = new LastEvent(LastEventKind.MatchStarted, activePlayerId, null, "Match started"),
+            Version = state.Version + 1,
+        });
+    }
+
+    /// <summary>
+    /// Host-only after <see cref="MatchPhase.GameOver"/>: same players and room, scores reset, new random first seat.
+    /// </summary>
+    public static EngineResult Rematch(MatchState state, string hostPlayerId, IDiceRoller roller)
+    {
+        if (state.Phase != MatchPhase.GameOver)
+        {
+            return EngineResult.Fail(EngineErrorCode.WrongPhase, "Match is not over.");
+        }
+
+        if (state.Players.Count == 0 || state.Players[0].PlayerId != hostPlayerId)
+        {
+            return EngineResult.Fail(EngineErrorCode.NotHost, "Only the host can start a rematch.");
+        }
+
+        var resetPlayers = state.Players.Select(p => p with { MatchScore = 0 }).ToList();
+        var firstSeat = roller.Next(resetPlayers.Count);
+        var activePlayerId = resetPlayers[firstSeat].PlayerId;
+
+        return EngineResult.Ok(state with
+        {
+            Players = resetPlayers,
+            WinnerId = null,
+            TurnScore = 0,
+            Dice = FreshDice(state.Rules.DiceCount),
+            ActivePlayerId = activePlayerId,
+            Phase = MatchPhase.AwaitingRoll,
+            LastEvent = new LastEvent(LastEventKind.MatchStarted, activePlayerId, null, "Rematch started"),
+            Version = state.Version + 1,
+        });
+    }
+
+    /// <summary>
+    /// Remove a player from the pre-game lobby and renumber seats. Used when a guest leaves voluntarily.
+    /// </summary>
+    public static EngineResult LeaveLobby(MatchState state, string playerId)
+    {
+        if (state.Phase != MatchPhase.WaitingForOpponent)
+        {
+            return EngineResult.Fail(EngineErrorCode.WrongPhase, "Not in the lobby.");
+        }
+
+        if (state.GetPlayer(playerId) is null)
+        {
+            return EngineResult.Fail(EngineErrorCode.UnknownPlayer, "Unknown player.");
+        }
+
+        var remaining = state.Players
+            .Where(p => p.PlayerId != playerId)
+            .Select((p, i) => p with { Seat = i })
+            .ToList();
+
+        var leaver = state.GetPlayer(playerId)!;
+        return EngineResult.Ok(state with
+        {
+            Players = remaining,
+            LastEvent = new LastEvent(LastEventKind.None, playerId, null, $"{leaver.DisplayName} left"),
             Version = state.Version + 1,
         });
     }
@@ -248,7 +375,7 @@ public static class FarkleEngine
             });
         }
 
-        var nextActive = state.Opponent(playerId)!.PlayerId;
+        var nextActive = NextActivePlayerId(state, playerId);
         return EngineResult.Ok(state with
         {
             Players = newPlayers,
@@ -274,11 +401,11 @@ public static class FarkleEngine
             return EngineResult.Fail(EngineErrorCode.UnknownPlayer, "Unknown player.");
         }
 
-        var winner = state.Opponent(playerId);
+        var winnerId = WinnerAfterForfeit(state, playerId);
         return EngineResult.Ok(state with
         {
             Phase = MatchPhase.GameOver,
-            WinnerId = winner?.PlayerId,
+            WinnerId = winnerId,
             TurnScore = 0,
             LastEvent = new LastEvent(LastEventKind.Forfeit, playerId, null, reason),
             Version = state.Version + 1,
@@ -304,7 +431,7 @@ public static class FarkleEngine
 
         var bustedPlayerId = state.ActivePlayerId
             ?? throw new InvalidOperationException("BustReveal without an active player.");
-        var nextActive = state.Opponent(bustedPlayerId)?.PlayerId ?? bustedPlayerId;
+        var nextActive = NextActivePlayerId(state, bustedPlayerId);
 
         return EngineResult.Ok(state with
         {
@@ -314,6 +441,33 @@ public static class FarkleEngine
             LastEvent = new LastEvent(LastEventKind.None, null, null, null),
             Version = state.Version + 1,
         });
+    }
+
+    private static string NextActivePlayerId(MatchState state, string currentPlayerId)
+    {
+        var ordered = state.Players.OrderBy(p => p.Seat).ToList();
+        var i = ordered.FindIndex(p => p.PlayerId == currentPlayerId);
+        if (i < 0)
+        {
+            return ordered[0].PlayerId;
+        }
+
+        return ordered[(i + 1) % ordered.Count].PlayerId;
+    }
+
+    private static string? WinnerAfterForfeit(MatchState state, string forfeiterId)
+    {
+        var rest = state.Players.Where(p => p.PlayerId != forfeiterId).ToList();
+        if (rest.Count == 0)
+        {
+            return null;
+        }
+
+        return rest
+            .OrderByDescending(p => p.MatchScore)
+            .ThenBy(p => p.Seat)
+            .First()
+            .PlayerId;
     }
 
     private static MatchState BustAndPass(MatchState state, Die[] currentDice, string playerId)

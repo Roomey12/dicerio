@@ -10,7 +10,7 @@ public sealed class EngineTests
     private static MatchState NewStartedMatch(IDiceRoller? roller = null, RuleSet? rules = null)
     {
         rules ??= RuleSet.V1;
-        var state = FarkleEngine.CreateMatch("m1", "ABC123", rules, Alice);
+        var state = FarkleEngine.CreateMatch("m1", "ABC123", rules, Alice, maxPlayers: 2);
         var add = FarkleEngine.AddOpponent(state, Bob, roller ?? new ScriptedRoller(Array.Empty<int>(), new[] { 0 }));
         Assert.True(add.IsOk);
         return add.State!;
@@ -23,6 +23,7 @@ public sealed class EngineTests
         Assert.Equal(MatchPhase.WaitingForOpponent, s.Phase);
         Assert.Single(s.Players);
         Assert.Null(s.ActivePlayerId);
+        Assert.Equal(2, s.MaxPlayers);
     }
 
     [Fact]
@@ -37,12 +38,31 @@ public sealed class EngineTests
     }
 
     [Fact]
-    public void AddOpponent_when_match_full_fails()
+    public void AddOpponent_when_match_already_started_fails()
     {
         var s = NewStartedMatch();
         var r = FarkleEngine.AddOpponent(s, new Player("p-c", "Carol", 2, 0), new ScriptedRoller(Array.Empty<int>()));
         Assert.False(r.IsOk);
         Assert.Equal(EngineErrorCode.WrongPhase, r.Error!.Code);
+    }
+
+    [Fact]
+    public void AddOpponent_when_player_count_already_at_cap_returns_RoomFull()
+    {
+        var carol = new Player("p-c", "Carol", 2, 0);
+        var dan = new Player("p-d", "Dan", 3, 0);
+        var s0 = FarkleEngine.CreateMatch("m1", "ABC", RuleSet.V1, Alice, maxPlayers: 3);
+        var crowded = s0 with
+        {
+            Players = new[] { Alice, Bob, carol },
+            Phase = MatchPhase.WaitingForOpponent,
+            ActivePlayerId = null,
+            LastEvent = new LastEvent(LastEventKind.None, null, null, null),
+            Version = 99,
+        };
+        var r = FarkleEngine.AddOpponent(crowded, dan, new ScriptedRoller(Array.Empty<int>()));
+        Assert.False(r.IsOk);
+        Assert.Equal(EngineErrorCode.RoomFull, r.Error!.Code);
     }
 
     [Fact]
@@ -330,5 +350,48 @@ public sealed class EngineTests
         Assert.Equal(0, roller.Remaining);
         Assert.Equal(1, r2.State!.Dice[0].Value);
         Assert.True(r2.State.Dice[0].Locked);
+    }
+
+    [Fact]
+    public void AddOpponent_below_max_stays_in_lobby_until_full()
+    {
+        var carol = new Player("p-c", "Carol", 2, 0);
+        var s0 = FarkleEngine.CreateMatch("m1", "ABC", RuleSet.V1, Alice, maxPlayers: 3);
+        var r1 = FarkleEngine.AddOpponent(s0, Bob, new ScriptedRoller(Array.Empty<int>(), new[] { 0 }));
+        Assert.True(r1.IsOk);
+        Assert.Equal(MatchPhase.WaitingForOpponent, r1.State!.Phase);
+        Assert.Equal(2, r1.State.Players.Count);
+        var r2 = FarkleEngine.AddOpponent(r1.State!, carol, new ScriptedRoller(Array.Empty<int>(), new[] { 0 }));
+        Assert.True(r2.IsOk);
+        Assert.Equal(MatchPhase.AwaitingRoll, r2.State!.Phase);
+    }
+
+    [Fact]
+    public void StartLobbyMatch_requires_host_and_two_players()
+    {
+        var s0 = FarkleEngine.CreateMatch("m1", "ABC", RuleSet.V1, Alice, maxPlayers: 5);
+        var s1 = FarkleEngine.AddOpponent(s0, Bob, new ScriptedRoller(Array.Empty<int>(), new[] { 0 })).State!;
+        var rBad = FarkleEngine.StartLobbyMatch(s1, Bob.PlayerId, new ScriptedRoller(Array.Empty<int>(), new[] { 0 }));
+        Assert.False(rBad.IsOk);
+        Assert.Equal(EngineErrorCode.NotHost, rBad.Error!.Code);
+        var rOk = FarkleEngine.StartLobbyMatch(s1, Alice.PlayerId, new ScriptedRoller(Array.Empty<int>(), new[] { 1 }));
+        Assert.True(rOk.IsOk);
+        Assert.Equal(MatchPhase.AwaitingRoll, rOk.State!.Phase);
+    }
+
+    [Fact]
+    public void Rematch_resets_scores()
+    {
+        var s = NewStartedMatch(rules: RuleSet.V1.WithTargetScore(1000));
+        var active = s.ActivePlayerId!;
+        var ended = FarkleEngine.Roll(s, active, new ScriptedRoller(new[] { 1, 1, 1, 2, 3, 4 })).State!;
+        ended = FarkleEngine.SubmitLock(ended, active, new[] { 0, 1, 2 }).State!;
+        ended = FarkleEngine.Bank(ended, active).State!;
+        Assert.Equal(MatchPhase.GameOver, ended.Phase);
+        var hostId = ended.Players[0].PlayerId;
+        var rem = FarkleEngine.Rematch(ended, hostId, new ScriptedRoller(Array.Empty<int>(), new[] { 0 })).State!;
+        Assert.Equal(MatchPhase.AwaitingRoll, rem.Phase);
+        Assert.Null(rem.WinnerId);
+        Assert.True(rem.Players.All(p => p.MatchScore == 0));
     }
 }
