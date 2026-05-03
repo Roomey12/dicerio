@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/node_modules/
+client/dist/
+client/.vite/
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+*.user
+README.md

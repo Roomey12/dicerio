@@ -1,0 +1,17 @@
+# .NET
+**/bin/
+**/obj/
+*.user
+.vs/
+
+# Node
+node_modules/
+client/dist/
+client/.vite/
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+.DS_Store

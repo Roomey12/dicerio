@@ -1,0 +1,15 @@
+# Render Blueprint: one-click deploy of the dicerio server (which also serves
+# the bundled Vite SPA from /wwwroot).
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: dicerio
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
