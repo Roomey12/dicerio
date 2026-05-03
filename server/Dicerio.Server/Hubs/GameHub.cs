@@ -51,6 +51,7 @@ public sealed class GameHub : Hub
         if (membership is not null)
         {
             await _store.SetConnectionAsync(membership.MatchId, membership.PlayerId, null);
+            _store.ClearPendingLockSelection(membership.MatchId);
 
             var state = await _store.FindByMatchIdAsync(membership.MatchId);
             if (state is { Phase: MatchPhase.AwaitingRoll or MatchPhase.AwaitingLock })
@@ -119,7 +120,7 @@ public sealed class GameHub : Hub
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(matchId));
 
         await Clients.Caller.SendAsync(ServerEventStateUpdated,
-            Mapper.Project(initial, hostPlayerId, ConnectionsFor(matchId)));
+            ProjectDto(matchId, initial, hostPlayerId));
 
         return new CreateRoomResult(roomCode, matchId, hostPlayerId);
     }
@@ -177,6 +178,7 @@ public sealed class GameHub : Hub
 
         await _store.SetConnectionAsync(updated.MatchId, guestPlayerId, Context.ConnectionId);
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(updated.MatchId));
+        _store.ClearPendingLockSelection(updated.MatchId);
         await BroadcastState(updated);
         return new JoinRoomResult(updated.RoomCode, updated.MatchId, guestPlayerId);
     }
@@ -199,6 +201,36 @@ public sealed class GameHub : Hub
     public async Task Bank()
     {
         await ApplyAction((state, playerId) => FarkleEngine.Bank(state, playerId));
+    }
+
+    public async Task PreviewLock(IReadOnlyList<int> diceIndexes)
+    {
+        if (diceIndexes is null)
+        {
+            throw new HubException("InvalidArgs: diceIndexes is required.");
+        }
+
+        var membership = await _store.FindByConnectionAsync(Context.ConnectionId);
+        if (membership is null)
+        {
+            await Clients.Caller.SendAsync(ServerEventError,
+                new HubErrorPayload("NoMembership", "You are not currently in a match."));
+            return;
+        }
+
+        var indexes = diceIndexes.ToArray();
+        if (!_store.TrySetPendingLockSelection(membership.MatchId, membership.PlayerId, indexes))
+        {
+            return;
+        }
+
+        var state = await _store.FindByMatchIdAsync(membership.MatchId);
+        if (state is null)
+        {
+            return;
+        }
+
+        await BroadcastState(state);
     }
 
     public async Task LeaveRoom()
@@ -225,6 +257,7 @@ public sealed class GameHub : Hub
 
         if (updated is not null)
         {
+            _store.ClearPendingLockSelection(updated.MatchId);
             await BroadcastState(updated);
         }
     }
@@ -266,6 +299,7 @@ public sealed class GameHub : Hub
             return;
         }
 
+        _store.ClearPendingLockSelection(membership.MatchId);
         await BroadcastState(updated);
 
         if (updated.Phase == MatchPhase.BustReveal)
@@ -303,7 +337,9 @@ public sealed class GameHub : Hub
                     return;
                 }
 
+                store.ClearPendingLockSelection(matchId);
                 var connections = ConnectionsFor(matchId);
+                var pending = store.GetPendingLockSelectionSnapshot(matchId);
                 foreach (var (playerId, connectionId) in connections)
                 {
                     if (connectionId is null)
@@ -313,7 +349,7 @@ public sealed class GameHub : Hub
 
                     await hub.Clients.Client(connectionId).SendAsync(
                         ServerEventStateUpdated,
-                        Mapper.Project(updated, playerId, connections));
+                        Mapper.Project(updated, playerId, connections, pending));
                 }
             }
             catch (Exception ex)
@@ -336,9 +372,18 @@ public sealed class GameHub : Hub
         return new Dictionary<string, string?>();
     }
 
+    private MatchStateDto ProjectDto(string matchId, MatchState state, string? requesterPlayerId)
+    {
+        var connections = ConnectionsFor(matchId);
+        var pending = _store.GetPendingLockSelectionSnapshot(matchId);
+        return Mapper.Project(state, requesterPlayerId, connections, pending);
+    }
+
     private async Task BroadcastState(MatchState state)
     {
-        var connections = ConnectionsFor(state.MatchId);
+        var matchId = state.MatchId;
+        var connections = ConnectionsFor(matchId);
+        var pending = _store.GetPendingLockSelectionSnapshot(matchId);
         foreach (var (playerId, connectionId) in connections)
         {
             if (connectionId is null)
@@ -347,7 +392,7 @@ public sealed class GameHub : Hub
             }
 
             await Clients.Client(connectionId).SendAsync(ServerEventStateUpdated,
-                Mapper.Project(state, playerId, connections));
+                Mapper.Project(state, playerId, connections, pending));
         }
 
         if (state.Phase == MatchPhase.GameOver)

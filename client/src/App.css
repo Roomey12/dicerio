@@ -309,6 +309,12 @@ input[data-invalid="true"] {
   background: #d3edff;
 }
 
+.die[data-opponent-pick="true"]:not([data-selected="true"]) {
+  border-color: #a855d7;
+  background: #f3e8ff;
+  opacity: 1;
+}
+
 .die[data-disabled="true"] {
   cursor: default;
 }

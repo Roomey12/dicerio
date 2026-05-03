@@ -34,11 +34,16 @@ public sealed record MatchStateDto(
     long Version,
     long ElapsedMs,
     string? YouAre,
-    int? PendingLockHintTotal);
+    int? PendingLockHintTotal,
+    IReadOnlyList<int>? ActivePlayerPendingLockIndexes);
 
 public static class Mapper
 {
-    public static MatchStateDto Project(MatchState s, string? requesterPlayerId, IReadOnlyDictionary<string, string?> connections)
+    public static MatchStateDto Project(
+        MatchState s,
+        string? requesterPlayerId,
+        IReadOnlyDictionary<string, string?> connections,
+        IReadOnlyList<int>? activePlayerPendingLockIndexes)
     {
         var players = s.Players
             .Select(p => new PlayerDto(
@@ -72,7 +77,8 @@ public static class Mapper
             Version: s.Version,
             ElapsedMs: elapsedMs,
             YouAre: requesterPlayerId,
-            PendingLockHintTotal: bestUnlockedScore);
+            PendingLockHintTotal: bestUnlockedScore,
+            ActivePlayerPendingLockIndexes: activePlayerPendingLockIndexes);
     }
 
     private static int? ComputeBestUnlockedScore(MatchState s)

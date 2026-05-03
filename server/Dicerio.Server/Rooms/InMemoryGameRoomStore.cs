@@ -10,6 +10,13 @@ public sealed class InMemoryGameRoomStore : IGameRoomStore
         public required MatchState State { get; set; }
         public DateTime LastActivityUtc { get; set; }
         public Dictionary<string, string?> ConnectionByPlayer { get; } = new();
+
+        /// <summary>
+        /// Active player's in-progress lock selection (die indices) before SubmitLock.
+        /// Ephemeral — not part of <see cref="MatchState"/>; cleared on every real move.
+        /// </summary>
+        public int[]? PendingLockSelection { get; set; }
+
         public readonly object Gate = new();
     }
 
@@ -156,6 +163,88 @@ public sealed class InMemoryGameRoomStore : IGameRoomStore
                 var connsCopy = new Dictionary<string, string?>(entry.ConnectionByPlayer);
                 yield return (entry.State, entry.LastActivityUtc, connsCopy);
             }
+        }
+    }
+
+    /// <summary>
+    /// Validates and stores the active player's tentative lock indices for UI sync.
+    /// Empty array clears the preview. Returns false if the player isn't allowed to preview.
+    /// </summary>
+    public bool TrySetPendingLockSelection(string matchId, string playerId, int[] indexes)
+    {
+        if (!_byMatchId.TryGetValue(matchId, out var entry))
+        {
+            return false;
+        }
+
+        lock (entry.Gate)
+        {
+            var s = entry.State;
+            if (s.Phase != MatchPhase.AwaitingLock || s.ActivePlayerId != playerId)
+            {
+                return false;
+            }
+
+            if (indexes.Length == 0)
+            {
+                entry.PendingLockSelection = null;
+                entry.LastActivityUtc = DateTime.UtcNow;
+                return true;
+            }
+
+            var seen = new HashSet<int>();
+            foreach (var idx in indexes)
+            {
+                if (idx < 0 || idx >= s.Dice.Count)
+                {
+                    return false;
+                }
+
+                if (!seen.Add(idx))
+                {
+                    return false;
+                }
+
+                if (s.Dice[idx].Locked)
+                {
+                    return false;
+                }
+
+                if (s.Dice[idx].Value == 0)
+                {
+                    return false;
+                }
+            }
+
+            entry.PendingLockSelection = indexes.OrderBy(x => x).ToArray();
+            entry.LastActivityUtc = DateTime.UtcNow;
+            return true;
+        }
+    }
+
+    public void ClearPendingLockSelection(string matchId)
+    {
+        if (!_byMatchId.TryGetValue(matchId, out var entry))
+        {
+            return;
+        }
+
+        lock (entry.Gate)
+        {
+            entry.PendingLockSelection = null;
+        }
+    }
+
+    public int[]? GetPendingLockSelectionSnapshot(string matchId)
+    {
+        if (!_byMatchId.TryGetValue(matchId, out var entry))
+        {
+            return null;
+        }
+
+        lock (entry.Gate)
+        {
+            return entry.PendingLockSelection?.ToArray();
         }
     }
 }

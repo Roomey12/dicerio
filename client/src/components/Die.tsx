@@ -41,10 +41,12 @@ interface DieProps {
   disabled: boolean;
   empty: boolean;
   bust?: boolean;
+  /** Opponent's tentative lock selection (you are not the active player). */
+  opponentPick?: boolean;
   onClick?: () => void;
 }
 
-function DieView({ value, locked, selected, disabled, empty, bust, onClick }: DieProps) {
+function DieView({ value, locked, selected, disabled, empty, bust, opponentPick, onClick }: DieProps) {
   const interactive = !disabled && !locked && !empty && !bust && onClick;
   const pips = empty || value < 1 || value > 6 ? [] : PIP_LAYOUT[value];
   const visible = new Set(pips.map(([r, c]) => `${r}:${c}`));
@@ -56,6 +58,7 @@ function DieView({ value, locked, selected, disabled, empty, bust, onClick }: Di
       data-empty={empty}
       data-locked={locked}
       data-selected={selected}
+      data-opponent-pick={opponentPick ? true : undefined}
       data-disabled={disabled}
       data-bust={bust ? true : undefined}
       className="die"

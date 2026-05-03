@@ -67,6 +67,8 @@ export interface MatchStateDto {
   elapsedMs: number;
   youAre: string | null;
   pendingLockHintTotal: number | null;
+  /** Die indices the active player is highlighting before Lock (AwaitingLock only). */
+  activePlayerPendingLockIndexes: number[] | null;
 }
 
 export interface CreateRoomResult {
@@ -99,4 +101,5 @@ export const HubMethods = {
   SubmitLock: "SubmitLock",
   Bank: "Bank",
   LeaveRoom: "LeaveRoom",
+  PreviewLock: "PreviewLock",
 } as const;

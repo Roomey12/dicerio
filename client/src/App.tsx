@@ -177,16 +177,19 @@ export default function App() {
   const lastVersionRef = useRef<number>(0);
   const previouslyMyTurnRef = useRef<boolean>(false);
   const clientRef = useRef<GameClient | null>(null);
+  const wasAwaitingLockMyTurnRef = useRef(false);
 
   useEffect(() => {
     const c = new GameClient({
       onState: (s) => {
         const isNewMatch = currentMatchIdRef.current !== s.matchId;
+        const versionBumped = isNewMatch || s.version > lastVersionRef.current;
         if (isNewMatch) {
           currentMatchIdRef.current = s.matchId;
           setHistory(reduceHistory(emptyHistory(), s));
           lastVersionRef.current = 0;
           previouslyMyTurnRef.current = false;
+          wasAwaitingLockMyTurnRef.current = false;
         } else {
           setHistory((h) => reduceHistory(h, s));
         }
@@ -200,7 +203,9 @@ export default function App() {
 
         setMatch(s);
         setScreen("match");
-        setSelectedIndexes([]);
+        if (versionBumped) {
+          setSelectedIndexes([]);
+        }
       },
       onError: (e: HubErrorPayload) => {
         setError(`${e.code}: ${e.message}`);
@@ -219,6 +224,26 @@ export default function App() {
 
   const youAre = match?.youAre ?? null;
   const isYourTurn = !!match && !!youAre && match.activePlayerId === youAre;
+
+  useEffect(() => {
+    const c = clientRef.current;
+    if (!c || c.state !== HubConnectionState.Connected) {
+      return undefined;
+    }
+    const inAwaitingLockMine = isYourTurn && match?.phase === "AwaitingLock";
+    if (inAwaitingLockMine) {
+      wasAwaitingLockMyTurnRef.current = true;
+      const t = window.setTimeout(() => {
+        void c.previewLock(selectedIndexes);
+      }, 80);
+      return () => window.clearTimeout(t);
+    }
+    if (wasAwaitingLockMyTurnRef.current) {
+      wasAwaitingLockMyTurnRef.current = false;
+      void c.previewLock([]);
+    }
+    return undefined;
+  }, [isYourTurn, match?.phase, match?.matchId, selectedIndexes]);
 
   const youHaveScoringDie = useMemo(() => {
     if (!match) return false;
@@ -552,6 +577,13 @@ function Board({
       return `${who} busted — turn lost`;
     }
     if (!isYourTurn) {
+      if (
+        state.phase === "AwaitingLock" &&
+        state.activePlayerPendingLockIndexes &&
+        state.activePlayerPendingLockIndexes.length > 0
+      ) {
+        return `${opponent?.displayName ?? "Opponent"} picking lock…`;
+      }
       return `${opponent?.displayName ?? "Opponent"}'s turn`;
     }
     if (state.phase === "AwaitingRoll") {
@@ -610,18 +642,25 @@ function Board({
         </div>
 
         <div className="dice-grid" data-bust={isBustReveal}>
-          {state.dice.map((d, idx) => (
-            <Die
-              key={idx}
-              value={d.value}
-              locked={d.locked}
-              empty={d.value === 0}
-              selected={selectedIndexes.includes(idx)}
-              disabled={!isYourTurn || state.phase !== "AwaitingLock"}
-              onClick={() => toggleDie(idx)}
-              bust={isBustReveal && !d.locked}
-            />
-          ))}
+          {state.dice.map((d, idx) => {
+            const opponentPick =
+              !isYourTurn &&
+              state.phase === "AwaitingLock" &&
+              (state.activePlayerPendingLockIndexes?.includes(idx) ?? false);
+            return (
+              <Die
+                key={idx}
+                value={d.value}
+                locked={d.locked}
+                empty={d.value === 0}
+                selected={selectedIndexes.includes(idx)}
+                opponentPick={opponentPick}
+                disabled={!isYourTurn || state.phase !== "AwaitingLock"}
+                onClick={() => toggleDie(idx)}
+                bust={isBustReveal && !d.locked}
+              />
+            );
+          })}
         </div>
 
         <div className="event-strip" data-kind={state.lastEvent.kind}>

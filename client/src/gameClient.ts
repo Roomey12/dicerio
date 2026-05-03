@@ -92,6 +92,10 @@ export class GameClient {
     await this.connection.invoke(HubMethods.Bank);
   }
 
+  async previewLock(diceIndexes: number[]): Promise<void> {
+    await this.connection.invoke(HubMethods.PreviewLock, diceIndexes);
+  }
+
   async leave(): Promise<void> {
     if (this.connection.state === HubConnectionState.Connected) {
       await this.connection.invoke(HubMethods.LeaveRoom);
